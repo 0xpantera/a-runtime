@@ -1,4 +1,5 @@
-use crate::{future::PollState, Future};
+use crate::{future::PollState, runtime, Future};
+use mio::{Interest, Token};
 use std::io::{ErrorKind, Read, Write};
 
 fn get_req(path: &str) -> String {
@@ -49,7 +50,10 @@ impl Future for HttpGetFuture {
         if self.stream.is_none() {
             println!("FIRST POLL - START OPERATION");
             self.write_request();
-            return PollState::NotReady;
+
+            runtime::registry()
+                .register(self.stream.as_mut().unwrap(), Token(0), Interest::READABLE)
+                .unwrap();
         }
 
         let mut buff = vec![0u8; 4096];
