@@ -1,5 +1,5 @@
-use crate::{future::PollState, runtime, Future};
-use mio::{Interest, Token};
+use crate::{future::PollState, runtime::{self, reactor, Waker}, Future};
+use mio::Interest;
 use std::io::{ErrorKind, Read, Write};
 
 fn get_req(path: &str) -> String {
@@ -46,7 +46,7 @@ impl HttpGetFuture {
 impl Future for HttpGetFuture {
     type Output = String;
 
-    fn poll(&mut self) -> PollState<Self::Output> {
+    fn poll(&mut self, waker: &Waker) -> PollState<Self::Output> {
         if self.stream.is_none() {
             println!("FIRST POLL - START OPERATION");
             self.write_request();
