@@ -84,6 +84,59 @@ impl Executor {
     fn task_count(&self) -> usize {
         CURRENT_EXEC.with(|q| q.tasks.borrow().len())
     }
+
+    /// Entry point to `Executor`:
+    /// 1. Spawns the future received.
+    /// 2. Loop as long as our asynchronous programs is running.
+    /// 3. On every iteration, create an inner loop that runs as long as 
+    ///    there are tasks in `ready_queue`.
+    /// 4. If there is a task in `ready_queue`, take ownership of the `Future` 
+    ///    by removing from collection. Guard against false wakeups by continuing
+    ///    if there is no future in it anymore.
+    /// 5. Create a `Waker` instance to pass into `Future::poll()`. This `Waker`
+    ///    instance now holds the `id` property that IDs this specific `Future` and
+    ///    a handle to the thread it's currently running on.
+    /// 6. Call `Future::poll`. If `NotReady` insert back into `tasks`. If `Ready` it
+    ///    continues to the next item in the `ready_queue`. The `Future` will be dropped
+    ///    before next iteration of `while let` loop because it took ownership.
+    /// 7. After polling all task in `ready_queue` get `tasks` count to see how many left.
+    /// 8. If there are tasks left call `thread::park()`. This will yield control to the 
+    ///    OS scheduler, and `Executor` does nothing until it's woken up again.
+    /// 9. If there are no tasks left the program is done and exit the main loop.
+    pub fn block_on<F>(&mut self, future: F)
+    where
+        F: Future<Output = String> + 'static,
+    {
+        spawn(future);
+
+        loop {
+            while let Some(id) = self.pop_ready() {
+                let mut future = match self.get_future(id) {
+                    Some(f) => f,
+                    // guard against false wakeups
+                    None => continue,
+                };
+                let waker = self.get_waker(id);
+
+                match future.poll(&waker) {
+                    PollState::NotReady => self.insert_task(id, future),
+                    PollState::Ready(_) => continue,
+                }
+            }
+
+            let task_count = self.task_count();
+            let name = thread::current().name().unwrap_or_default().to_string();
+
+            if task_count > 0 {
+                println!("{name}: {task_count} pending tasks. Sleep until notified.");
+                thread::park();
+            } else {
+                println!("{name}: All tasks are finished");
+                break;
+            }
+        }
+    }
+
 }
 
 #[derive(Clone)]
