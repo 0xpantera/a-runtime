@@ -154,11 +154,11 @@ pub struct Waker {
 }
 
 impl Waker {
-    /// When a `Waker::wake` is called, takes a lock on the `Mutex`
-    /// that protects the ready queue shared with the executor.
+    /// When `Waker::wake` is called, takes a lock on the `Mutex`
+    /// that protects the `ready_queue` shared with the `Executor`.
     /// The `id` value for the task associated with this `Waker` is
     /// pushed onto the ready queue. After, `unpark` is called on the
-    /// executor thread to wake it up. It will now find the task
+    /// `Executor` thread to wake it up. It will now find the task
     /// associated with this `Waker` in the ready queue and call `poll` on it.
     pub fn wake(&self) {
         self.ready_queue
