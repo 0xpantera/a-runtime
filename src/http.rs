@@ -15,7 +15,7 @@ pub struct Http;
 
 impl Http {
     pub fn get(path: &str) -> impl Future<Output = String> {
-        HttpGetFuture::new(path)
+        HttpGetFuture::new(path.to_string())
     }
 }
 
@@ -23,14 +23,17 @@ struct HttpGetFuture {
     stream: Option<mio::net::TcpStream>,
     buffer: Vec<u8>,
     path: String,
+    id: usize,
 }
 
 impl HttpGetFuture {
-    fn new(path: &str) -> Self {
+    fn new(path: String) -> Self {
+        let id = reactor().next_id();
         Self {
             stream: None,
             buffer: vec![],
             path: path.to_string(),
+            id,
         }
     }
 
@@ -50,10 +53,10 @@ impl Future for HttpGetFuture {
         if self.stream.is_none() {
             println!("FIRST POLL - START OPERATION");
             self.write_request();
+            let stream = self.stream.as_mut().unwrap();
 
-            runtime::registry()
-                .register(self.stream.as_mut().unwrap(), Token(0), Interest::READABLE)
-                .unwrap();
+            runtime::reactor().register(stream, Interest::READABLE, self.id);
+            runtime::reactor().set_waker(waker, self.id);
         }
 
         let mut buff = vec![0u8; 4096];
@@ -61,6 +64,8 @@ impl Future for HttpGetFuture {
             match self.stream.as_mut().unwrap().read(&mut buff) {
                 Ok(0) => {
                     let s = String::from_utf8_lossy(&self.buffer);
+                    runtime::reactor()
+                        .deregister(self.stream.as_mut().unwrap(), self.id);
                     break PollState::Ready(s.to_string());
                 }
                 Ok(n) => {
@@ -68,6 +73,11 @@ impl Future for HttpGetFuture {
                     continue;
                 }
                 Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                    // https://doc.rust-lang.org/stable/std/future/trait.Future.html#tymethod.poll
+                    // The `Waker` from the most recent call is expected to be scheduled to wake up.
+                    // Meaning every time a `WouldBlock` error is received, the most recent `Waker`
+                    // must be stored.
+                    runtime::reactor().set_waker(waker, self.id);
                     break PollState::NotReady;
                 }
                 Err(e) if e.kind() == ErrorKind::Interrupted => {
