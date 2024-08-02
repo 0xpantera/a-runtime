@@ -69,3 +69,46 @@ impl Reactor {
         self.next_id.fetch_add(1, Ordering::Relaxed)
     }
 }
+
+/// 1. Create an `events` collection.
+/// 2. Loop indefinitely. Not ideal. No way to shut down event loop once started.
+/// 3. Call `Poll::poll` with a timeout of `None`, meaning it will never time out
+///    and block until it receives an event notification.
+/// 4. When the call returns, loop through every event received.
+/// 5. If an event is received it means something we registered interest in happened.
+///    Get the `id` we passed when we first registered an interest in events on this
+///    `TcpStream`.
+/// 6. Try to get the associated `Waker` and call `Waker::wake` on it. Guard against
+///    the fact that `Waker` may have been removed from the collection already, in which
+///    case nothing is done.
+fn event_loop(mut poll: Poll, wakers: Wakers) {
+    let mut events = Events::with_capacity(100);
+    loop {
+        poll.poll(&mut events, None).unwrap();
+        for e in events.iter() {
+            let Token(id) = e.token();
+            let wakers = wakers.lock().unwrap();
+
+            if let Some(waker) = wakers.get(&id) {
+                waker.wake();
+            }
+        }
+    }
+}
+
+pub fn start() {
+    use thread::spawn;
+
+    let wakers = Arc::new(Mutex::new(HashMap::new()));
+    let poll = Poll::new().unwrap();
+    let registry = poll.registry().try_clone().unwrap();
+    let next_id = AtomicUsize::new(1);
+    let reactor = Reactor {
+        wakers: wakers.clone(),
+        registry,
+        next_id,
+    };
+
+    REACTOR.set(reactor).ok().expect("Reactor already running");
+    spawn(move || event_loop(poll, wakers));
+}
