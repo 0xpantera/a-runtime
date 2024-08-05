@@ -58,7 +58,7 @@ impl Reactor {
     /// Removes the `Waker` from `wakers`. Then, derigisters the
     /// `TcpStream` from the `Poll` instance.
     pub fn deregister(&self, stream: &mut TcpStream, id: usize) {
-        self.wakers.lock().map(|mut w| w.remove(&id).unwrap());
+        let _ = self.wakers.lock().map(|mut w| w.remove(&id).unwrap());
         self.registry.deregister(stream).unwrap();
     }
 
