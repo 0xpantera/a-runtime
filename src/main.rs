@@ -4,6 +4,7 @@ mod runtime;
 use crate::http::Http;
 use future::{Future, PollState};
 use runtime::Waker;
+use std::{fmt::Write, marker::PhantomPinned, pin::Pin};
 
 fn main() {
     let mut executor = runtime::init();
@@ -36,8 +37,8 @@ fn async_main() -> impl Future<Output=String> {
         
 enum State0 {
     Start,
-    Wait1(Box<dyn Future<Output = String>>),
-    Wait2(Box<dyn Future<Output = String>>),
+    Wait1(Pin<Box<dyn Future<Output = String>>>),
+    Wait2(Pin<Box<dyn Future<Output = String>>>),
     Resolved,
 }
 
@@ -49,6 +50,7 @@ struct Stack0 {
 struct Coroutine0 {
     stack: Stack0,
     state: State0,
+    _pin: PhantomPinned,
 }
 
 impl Coroutine0 {
@@ -56,6 +58,7 @@ impl Coroutine0 {
         Self { 
             state: State0::Start,
             stack: Stack0::default(),
+            _pin: PhantomPinned,
         }
     }
 }
@@ -64,51 +67,52 @@ impl Coroutine0 {
 impl Future for Coroutine0 {
     type Output = String;
 
-    fn poll(&mut self, waker: &Waker) -> PollState<Self::Output> {
+    fn poll(self: Pin<&mut Self>, waker: &Waker) -> PollState<Self::Output> {
+        let this = unsafe { self.get_unchecked_mut() };
         loop {
-        match self.state {
+        match this.state {
                 State0::Start => {
                     // Initialize stack (hoist variables)
-                    self.stack.counter = Some(0);
+                    this.stack.counter = Some(0);
                     // ---- Code you actually wrote ----
                     println!("Program starting");
 
                     // ---------------------------------
-                    let fut1 = Box::new( Http::get("/600/HelloAsyncAwait"));
-                    self.state = State0::Wait1(fut1);
+                    let fut1 = Box::pin( Http::get("/600/HelloAsyncAwait"));
+                    this.state = State0::Wait1(fut1);
                     // Save stack (unnecessary here since just initialized)
                 }
 
                 State0::Wait1(ref mut f1) => {
-                    match f1.poll(waker) {
+                    match f1.as_mut().poll(waker) {
                         PollState::Ready(txt) => {
                             // Restore stack
-                            let mut counter = self.stack.counter.take().unwrap();
+                            let mut counter = this.stack.counter.take().unwrap();
                             // ---- Code you actually wrote ----
                             println!("{txt}");
                             counter += 1;
                             // ---------------------------------
-                            let fut2 = Box::new( Http::get("/400/HelloAsyncAwait"));
-                            self.state = State0::Wait2(fut2);
+                            let fut2 = Box::pin( Http::get("/400/HelloAsyncAwait"));
+                            this.state = State0::Wait2(fut2);
                             // Save stack
-                            self.stack.counter = Some(counter);
+                            this.stack.counter = Some(counter);
                         }
                         PollState::NotReady => break PollState::NotReady,
                     }
                 }
 
                 State0::Wait2(ref mut f2) => {
-                    match f2.poll(waker) {
+                    match f2.as_mut().poll(waker) {
                         PollState::Ready(txt) => {
                             // Restore stack
-                            let mut counter = self.stack.counter.take().unwrap();
+                            let mut counter = this.stack.counter.take().unwrap();
                             // ---- Code you actually wrote ----
                             println!("{txt}");
                             counter += 1;
 
                             println!("Received {} responses.", counter);
                             // ---------------------------------
-                            self.state = State0::Resolved;
+                            this.state = State0::Resolved;
                             // Save stack (all variables set to `None` already)
                             break PollState::Ready(String::new());
                         }

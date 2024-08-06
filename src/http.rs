@@ -1,6 +1,6 @@
 use crate::{future::PollState, runtime::{self, reactor, Waker}, Future};
 use mio::Interest;
-use std::io::{ErrorKind, Read, Write};
+use std::{io::{ErrorKind, Read, Write}, pin::Pin};
 
 fn get_req(path: &str) -> String {
     format!(
@@ -49,13 +49,14 @@ impl HttpGetFuture {
 impl Future for HttpGetFuture {
     type Output = String;
 
-    fn poll(&mut self, waker: &Waker) -> PollState<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, waker: &Waker) -> PollState<Self::Output> {
+        let id = self.id;
         if self.stream.is_none() {
             println!("FIRST POLL - START OPERATION");
             self.write_request();
-            let stream = self.stream.as_mut().unwrap();
+            let stream = (&mut self).stream.as_mut().unwrap();
 
-            runtime::reactor().register(stream, Interest::READABLE, self.id);
+            runtime::reactor().register(stream, Interest::READABLE, id);
             runtime::reactor().set_waker(waker, self.id);
         }
 
@@ -63,10 +64,10 @@ impl Future for HttpGetFuture {
         loop {
             match self.stream.as_mut().unwrap().read(&mut buff) {
                 Ok(0) => {
-                    let s = String::from_utf8_lossy(&self.buffer);
+                    let s = String::from_utf8_lossy(&self.buffer).to_string();
                     runtime::reactor()
-                        .deregister(self.stream.as_mut().unwrap(), self.id);
-                    break PollState::Ready(s.to_string());
+                        .deregister(self.stream.as_mut().unwrap(), id);
+                    break PollState::Ready(s);
                 }
                 Ok(n) => {
                     self.buffer.extend(&buff[0..n]);

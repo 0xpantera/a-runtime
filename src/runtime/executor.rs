@@ -4,9 +4,10 @@ use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
     thread::{self, Thread},
+    pin::Pin,
 };
 
-type Task = Box<dyn Future<Output = String>>;
+type Task = Pin<Box<dyn Future<Output = String>>>;
 
 thread_local! {
     static CURRENT_EXEC: ExecutorCore = ExecutorCore::default();
@@ -36,7 +37,7 @@ where
 {
     CURRENT_EXEC.with(|e| {
         let id = e.next_id.get();
-        e.tasks.borrow_mut().insert(id, Box::new(future));
+        e.tasks.borrow_mut().insert(id, Box::pin(future));
         e.ready_queue.lock().map(|mut q| q.push(id)).unwrap();
         e.next_id.set(id + 1);
     });
@@ -118,7 +119,7 @@ impl Executor {
                 };
                 let waker = self.get_waker(id);
 
-                match future.poll(&waker) {
+                match future.as_mut().poll(&waker) {
                     PollState::NotReady => self.insert_task(id, future),
                     PollState::Ready(_) => continue,
                 }
