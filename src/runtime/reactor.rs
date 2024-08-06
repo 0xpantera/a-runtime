@@ -1,4 +1,3 @@
-use crate::runtime::Waker;
 use mio::{net::TcpStream, Events, Interest, Poll, Registry, Token};
 use std::{
     collections::HashMap,
@@ -6,6 +5,7 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex, OnceLock,
     },
+    task::{Context, Waker},
     thread,
 };
 
@@ -47,11 +47,11 @@ impl Reactor {
     /// and the old one is dropped. The most recent `Waker` should always be
     /// the one stored so that this fn can be called multiple times, eventhough
     /// there is already a `Waker` associated with the `TcpStream`.
-    pub fn set_waker(&self, waker: &Waker, id: usize) {
+    pub fn set_waker(&self, cx: &Context, id: usize) {
         let _ = self
             .wakers
             .lock()
-            .map(|mut w| w.insert(id, waker.clone()).is_none())
+            .map(|mut w| w.insert(id, cx.waker().clone()).is_none())
             .unwrap();
     }
 
@@ -90,7 +90,7 @@ fn event_loop(mut poll: Poll, wakers: Wakers) {
             let wakers = wakers.lock().unwrap();
 
             if let Some(waker) = wakers.get(&id) {
-                waker.wake();
+                waker.wake_by_ref();
             }
         }
     }

@@ -1,6 +1,11 @@
-use crate::{future::PollState, runtime::{self, reactor, Waker}, Future};
+use crate::runtime::{self, reactor};
 use mio::Interest;
-use std::{io::{ErrorKind, Read, Write}, pin::Pin};
+use std::{
+    future::Future,
+    io::{ErrorKind, Read, Write}, 
+    pin::Pin,
+    task::{Context, Poll}
+};
 
 fn get_req(path: &str) -> String {
     format!(
@@ -49,7 +54,7 @@ impl HttpGetFuture {
 impl Future for HttpGetFuture {
     type Output = String;
 
-    fn poll(mut self: Pin<&mut Self>, waker: &Waker) -> PollState<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let id = self.id;
         if self.stream.is_none() {
             println!("FIRST POLL - START OPERATION");
@@ -57,7 +62,7 @@ impl Future for HttpGetFuture {
             let stream = (&mut self).stream.as_mut().unwrap();
 
             runtime::reactor().register(stream, Interest::READABLE, id);
-            runtime::reactor().set_waker(waker, self.id);
+            runtime::reactor().set_waker(cx, self.id);
         }
 
         let mut buff = vec![0u8; 4096];
@@ -67,7 +72,7 @@ impl Future for HttpGetFuture {
                     let s = String::from_utf8_lossy(&self.buffer).to_string();
                     runtime::reactor()
                         .deregister(self.stream.as_mut().unwrap(), id);
-                    break PollState::Ready(s);
+                    break Poll::Ready(s);
                 }
                 Ok(n) => {
                     self.buffer.extend(&buff[0..n]);
@@ -78,8 +83,8 @@ impl Future for HttpGetFuture {
                     // The `Waker` from the most recent call is expected to be scheduled to wake up.
                     // Meaning every time a `WouldBlock` error is received, the most recent `Waker`
                     // must be stored.
-                    runtime::reactor().set_waker(waker, self.id);
-                    break PollState::NotReady;
+                    runtime::reactor().set_waker(cx, self.id);
+                    break Poll::Pending;
                 }
                 Err(e) if e.kind() == ErrorKind::Interrupted => {
                     continue;

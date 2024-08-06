@@ -1,13 +1,14 @@
-use crate::future::{Future, PollState};
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
-    sync::{Arc, Mutex},
-    thread::{self, Thread},
+    future::Future,
     pin::Pin,
+    sync::{Arc, Mutex},
+    task::{Poll, Context, Wake, Waker},
+    thread::{self, Thread},
 };
 
-type Task = Pin<Box<dyn Future<Output = String>>>;
+type Task = Pin<Box<dyn Future<Output = ()>>>;
 
 thread_local! {
     static CURRENT_EXEC: ExecutorCore = ExecutorCore::default();
@@ -33,7 +34,7 @@ struct ExecutorCore {
 
 pub fn spawn<F>(future: F)
 where 
-    F: Future<Output = String> + 'static,
+    F: Future<Output = ()> + 'static,
 {
     CURRENT_EXEC.with(|e| {
         let id = e.next_id.get();
@@ -68,12 +69,12 @@ impl Executor {
     }
 
     /// Creates a new `Waker` instance.
-    fn get_waker(&self, id: usize) -> Waker {
-        Waker {
+    fn get_waker(&self, id: usize) -> Arc<MyWaker> {
+        Arc::new(MyWaker {
             id,
             thread: thread::current(),
             ready_queue: CURRENT_EXEC.with(|q| q.ready_queue.clone()),
-        }
+        })
     }
 
     /// Takes an `id` property and a `Task` property and inserts them into `tasks`
@@ -106,7 +107,7 @@ impl Executor {
     /// 9. If there are no tasks left the program is done and exit the main loop.
     pub fn block_on<F>(&mut self, future: F)
     where
-        F: Future<Output = String> + 'static,
+        F: Future<Output = ()> + 'static,
     {
         spawn(future);
 
@@ -117,11 +118,13 @@ impl Executor {
                     // guard against false wakeups
                     None => continue,
                 };
-                let waker = self.get_waker(id);
 
-                match future.as_mut().poll(&waker) {
-                    PollState::NotReady => self.insert_task(id, future),
-                    PollState::Ready(_) => continue,
+                let waker: Waker = self.get_waker(id).into();
+                let mut cx = Context::from_waker(&waker);
+
+                match future.as_mut().poll(&mut cx) {
+                    Poll::Pending => self.insert_task(id, future),
+                    Poll::Ready(_) => continue,
                 }
             }
 
@@ -141,7 +144,7 @@ impl Executor {
 }
 
 #[derive(Clone)]
-pub struct Waker {
+pub struct MyWaker {
     // Handle to the current Thread
     thread: Thread,
     // Identifies which task this Waker is associated with
@@ -154,14 +157,14 @@ pub struct Waker {
     ready_queue: Arc<Mutex<Vec<usize>>>,
 }
 
-impl Waker {
+impl Wake for MyWaker {
     /// When `Waker::wake` is called, takes a lock on the `Mutex`
     /// that protects the `ready_queue` shared with the `Executor`.
     /// The `id` value for the task associated with this `Waker` is
     /// pushed onto the ready queue. After, `unpark` is called on the
     /// `Executor` thread to wake it up. It will now find the task
     /// associated with this `Waker` in the ready queue and call `poll` on it.
-    pub fn wake(&self) {
+    fn wake(self: Arc<Self>) {
         self.ready_queue
             .lock()
             .map(|mut q| q.push(self.id))
