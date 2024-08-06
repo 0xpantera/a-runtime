@@ -5,3 +5,6 @@ edition = "2021"
 
 [dependencies]
 mio = { version = "0.8", features = ["net", "os-poll"] }
+reqwest = "0.11"
+tokio = { version = "1.35", features = ["full"] }
+tokio-macros = "2.3.0"
